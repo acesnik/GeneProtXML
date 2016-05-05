@@ -13,7 +13,6 @@ import featureshare
 import indel
 from lxml import etree as et
 import numpy as np
-from Bio import SeqIO
 import threading
 
 HTML_NS = "http://uniprot.org/uniprot"
@@ -24,37 +23,22 @@ UP = '{'+HTML_NS+'}'
 def __main__():
     #Parse Command Line
     parser = optparse.OptionParser()
-      #I/O
-    parser.add_option( '-x', '--reference_xml', dest='reference_xml', help='Reference protein UniProt-XML file. Sequence variant peptide entries are appended to this database to generate the ouptut UniProt-XML protein database.' )
-    parser.add_option( '-p', '--protein_fasta', dest='protein_fasta', help='Reference protein FASTA file. Used to generate SAV peptide entries. If no UniProt-XML is specified, SAV and NSJ entries will be appended to this database to generate an output database. By default, this output will be a UniProt-XML protein database without PTM annotations. If --output-fasta is selected, the output will be a protein FASTA.')
-    parser.add_option( '-g', '--gene_model', dest='gene_model', default=None, help='GTF gene model file. Used to annotate NSJ peptide entries.')
-    parser.add_option( '-v', '--snpeff_vcf', dest='snpeff_vcf', help='SnpEff VCF file with HGVS annotations (else read from stdin).' )
-    parser.add_option( '-c', '--cufflinks_bed', dest='cufflinks_bed', help='Reconstructed transcripts in bed format.' )
-    parser.add_option( '-b', '--splice_bed', dest='splice_bed', help='BED file (tophat junctions.bed) with sequence column added.' )
-    parser.add_option( '-o', '--output', dest='output', help='Output file path. Outputs UniProt-XML and FASTA format databases.' )
-    # parser.add_option( '-z', '--output_fasta', dest='output_fasta', action='store_true', default=False, help='Output a FASTA-format database. Place path for output file after the --output flag.')
-    # parser.add_option( '-m', '--threads', dest='threads', type='int', default=)
-      #Peptide sequence construction
-    parser.add_option( '-l', '--leading_aa_num', dest='leading_aa_num', type='int', default=33, help='Leading number of AAs to output for SAV peptides. Default: 33.' )
-    parser.add_option( '-t', '--trailing_aa_num', dest='trailing_aa_num', type='int', default=33, help='Trailing number of AAs to output for SAV peptides. Default: 33.' )
-      #Filtering parameters
-    parser.add_option( '-D', '--nsj_depth_cutoff', dest='nsj_depth_cutoff', type='int', default=0, help='Keep only NSJs found with above this depth (BED score field). Default: 0.' )
-    parser.add_option( '-E', '--snv_depth_cutoff', dest='snv_depth_cutoff', type='int', default=0, help='Keep only SNVs found with above this depth (DP=# field). Default: 0.' )
-    parser.add_option( '-M', '--minimum_length', dest='minimum_length', type='int', default=0, help='Keep only sequence variant peptides with greater than or equal to this length. Default: 0.' )
-      #Simple entry
-    parser.add_option( '-Q', '--bed_score_name', dest='bed_score_name', default="depth", help='Include in the NSJ ID line score_name:score. Default: "depth."'  )
-    parser.add_option( '-R', '--reference', dest='reference', default="None", help='Genome Reference Name for NSJ ID location. Automatically pulled from genome_build header in GTF if present.'  )
+    group = optparse.OptionGroup(parser, "Input/Output")
+    group.add_option( '-x', '--reference_xml', dest='reference_xml', help='Reference protein UniProt-XML file. Sequence variant peptide entries are appended to this database to generate the ouptut UniProt-XML protein database.' )
+    group.add_option( '-p', '--protein_fasta', dest='protein_fasta', help='Reference protein FASTA file. Used to generate SAV peptide entries. If no UniProt-XML is specified, SAV and NSJ entries will be appended to this database to generate an output database. By default, this output will be a UniProt-XML protein database without PTM annotations. If --output-fasta is selected, the output will be a protein FASTA.')
+    group.add_option( '-g', '--gene_model', dest='gene_model', default=None, help='GTF gene model file. Used to annotate NSJ peptide entries.')
+    group.add_option( '-v', '--snpeff_vcf', dest='snpeff_vcf', help='SnpEff VCF file with HGVS annotations (else read from stdin).' )
+    group.add_option( '-c', '--cufflinks_bed', dest='cufflinks_bed', help='Reconstructed transcripts in bed format.' )
+    group.add_option( '-o', '--output', dest='output', help='Output file path. Outputs UniProt-XML and FASTA format databases.' )
+    parser.add_option_group(group)
+    parser.add_option( '-m', '--threads', dest='threads', type='int', default=1, help='Number of threads to use for calculations')
     (options, args) = parser.parse_args()
 
     ##INPUTS##
     #Protein FASTA
-    try:
-        protein_fasta = os.path.abspath(options.protein_fasta)
-        protein_fasta = open(protein_fasta, 'r')
-        protein_fasta = refparse.read_protein_fasta(protein_fasta)
-    except Exception, e:
-        print >> sys.stderr, "failed: %s" % e
-        exit(2)
+    protein_fasta = os.path.abspath(options.protein_fasta)
+    protein_fasta = open(protein_fasta, 'r')
+    protein_fasta = refparse.read_protein_fasta(protein_fasta)
 
     #Reference XML/FASTA
     ensembl, uniprot = None, None
