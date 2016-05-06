@@ -1,6 +1,9 @@
 # module name: genemodel
 # main program: geneprotxml
 
+import re
+import math
+
 #IUPAC letters
 amino_acids = "ACDEFGHIKLMNPQRSTVWY"
 amino_acids_1to3 = {
@@ -74,22 +77,121 @@ def reverse_complement(dna_seq):
     return rc
 
 
+#Gene Model structure
+class Chromosome:
+    def __init__(self, name, sequence):
+        self.name = name
+        self.sequence = sequence
+        self.genes = []
+        self.amino_acid_sequences = []
+
+    def __len__(self): return len(self.sequence)
+
+    def __str__(self): return self.sequence
+
+    def __contains__(self, gene_name): return gene_name in [gene.name for gene in self.genes]
+
+
+class ChromSegment:
+    def __init__(self, id, chrom, strand, start, end, name, biotype):
+        self.name = name
+        self.id = id
+        self.biotype = biotype
+        self.chrom = chrom
+        self.strand = strand
+        self.start = start
+        self.end = end
+
+    def __len__(self): return self.end - self.start
+
+    def __str__(self): return self.chrom.sequence[self.start: self.end + 1]
+
+    def is_before(self, segment): return self.start < segment.start and self.end < segment.end and self.end < segment.start
+
+    def is_after(self, segment): return self.start > segment.start and self.end > segment.end and self.start > segment.end
+
+    def overlaps(self, segment): return not self.is_before(segment) and not self.is_after(segment)
+
+    def equals(self, segment): return self.chrom == segment.chrom and self.start == segment.start and self.end == segment.end
+
+    def bed_text(self, score, blockCount, blockSizes, blockStarts):
+        return '\t'.join([str(self.chrom.name), str(self.start), str(self.end), self.id,
+                  str(int(score)), self.strand, str(self.start), str(self.end), '255,0,0',
+                        str(blockCount), ','.join([str(blockSize) for blockSize in blockSizes]),
+                        ','.join([str(blockStart) for blockStart in blockStarts])])
+
+
 #Variation constructs
-class SequenceVariant:
-    def __init__(self, reference_residue, alternate_residue):
-        self.reference_residue = reference_residue
-        self.alternate_residue = alternate_residue
+class SequenceVariant(ChromSegment):
+    def __init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth):
+        length = math.max(len(reference), len(alternate))
+        ChromSegment.__init__(self, id, chrom, '+', position, position + length - 1, None, None)
+        self.qual = qual
+        self.reference = reference
+        self.alternate = alternate
+        self.allele_frequency = float(allele_frequency)
+        self.depth = depth
 
-    def lxml_element(self):
+    def __str__(self):
+        return ':'.join([self.chrom.name, str(self.start), str(self.end), self.reference, self.alternate, str(self.allele_frequency)])
+
+
+class SNV(SequenceVariant):
+    def __init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth):
+        SequenceVariant.__init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth)
+
+    
+    def is_missense(self):
         pass
 
+    # TODO: replace this with a check against the gene model instead of taking it from the snpeff annotations
+    def parse_aa_change(self, aa_change):
+        aa_abbrev_dict = amino_acids_3to1
+        aa_change_regex = '([A-Z])(\d+)([A-Z])'  # G528R
+        aa_hgvs_regex = 'p\.([A-Z][a-z][a-z])(\d+)([A-Z][a-z][a-z])(/c\.(\d+)([ACGTN])>([ACGTN]))'  # p.Gly528Arg/c.1582G>C
+        aa_pos = None  # 1-based position
+        ref_aa, alt_aa = '_', '_'
+        m = re.match(aa_change_regex,
+                     aa_change)  # parse aa_change, and get AA change position and alternate Animo Acid
+        if m:
+            aa_pos = int(m.groups()[1])
+            ref_aa = m.groups()[0]
+            alt_aa = m.groups()[2]
+        else:
+            m = re.match(aa_hgvs_regex, aa_change)
+            if m:
+                aa_pos = int(m.groups()[1])
+                ref_aa = aa_abbrev_dict[m.groups()[0]]
+                alt_aa = aa_abbrev_dict[m.groups()[2]]
+        return aa_pos, ref_aa, alt_aa
 
-class Indel:
-    def __init__(self):
-        pass
 
-    def lxml_element(self):
-        pass
+class Indel(ChromSegment):
+    def __init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth):
+        SequenceVariant.__init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth)
+
+
+class Insertion(Indel):
+    def __init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth):
+        Indel.__init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth)
+
+
+class Deletion(Indel):
+    def __init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth):
+        Indel.__init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth)
+
+
+class LocalHaplotype(ChromSegment):
+    def __init__(self, seqvar_list):
+        if not seqvar_list or False in [isinstance(seqvar, SequenceVariant) for seqvar in seqvar_list]: return None
+        self.seqvar_list = seqvar_list
+        start = sorted(self.seqvar_list, key=lambda x: x.start)[0].start
+        end = sorted(self.seqvar_list, key=lambda x: x.end)[0].end
+        chroms = [seqvar.chrom for seqvar in self.seqvar_list]
+        if len(chroms) > 1:
+            print "Error: Haplotypes across multiple chromosomes not expected in object LocalHaplotype."
+            exit(2)
+        ChromSegment.__init__(self, None, chroms[0], '+', start, end, None, None)
 
 
 #Amino acid sequences
@@ -106,9 +208,6 @@ class Modification:
     def __str__(self):
         return "description=" + self.description + " accession=" + self.accession + " feature_type=" + \
             self.feature_type + " monoisotopic_mass=" + self.monoisotopic_mass_shift
-
-    def lxml_element(self, position):
-        pass
 
 
 class AminoAcidSequence:
@@ -166,47 +265,7 @@ class AminoAcidSequence:
         pass
 
 
-#Gene Model structure
-class Chromosome:
-    def __init__(self, name, sequence):
-        self.name = name
-        self.sequence = sequence
-        self.genes = []
 
-    def __len__(self): return len(self.sequence)
-
-    def __str__(self): return self.sequence
-
-    def __contains__(self, gene_name): return gene_name in [gene.name for gene in self.genes]
-
-
-class ChromSegment:
-    def __init__(self, id, chrom, strand, start, end, name, biotype):
-        self.name = name
-        self.id = id
-        self.biotype = biotype
-        self.chrom = chrom
-        self.strand = strand
-        self.start = start
-        self.end = end
-
-    def __len__(self): return self.end - self.start
-
-    def __str__(self): return self.chrom.sequence[self.start: self.end + 1]
-
-    def is_before(self, segment): return self.start < segment.start and self.end < segment.end and self.end < segment.start
-
-    def is_after(self, segment): return self.start > segment.start and self.end > segment.end and self.start > segment.end
-
-    def overlaps(self, segment): return not self.is_before(segment) and not self.is_after(segment)
-
-    def equals(self, segment): return self.chrom == segment.chrom and self.start == segment.start and self.end == segment.end
-
-    def bed_text(self, score, blockCount, blockSizes, blockStarts):
-        return '\t'.join([str(self.chrom.name), str(self.start), str(self.end), self.id,
-                  str(int(score)), self.strand, str(self.start), str(self.end), '255,0,0',
-                        str(blockCount), ','.join([str(blockSize) for blockSize in blockSizes]),
-                        ','.join([str(blockStart) for blockStart in blockStarts])])
 
 
 class Gene(ChromSegment):

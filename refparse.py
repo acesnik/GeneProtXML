@@ -4,8 +4,8 @@
 __author__ = "anthony"
 __date__ = "$Oct 27, 2015 2:54:44 PM$"
 
+import re
 import genemodel
-import variantcalls
 from lxml import etree as et
 
 #Expect to make a new database if no path is given. Otherwise, manage the manimpulation of a current one.
@@ -78,6 +78,12 @@ class ProteinXmlManager:
     def set_sequence(self, entry, sequence):
         entry.find(self.UP + 'sequence').text = sequence.replace('\n', '').replace('\r', '')
 
+    def get_all_sequence_elements(self):
+        return self.root.findall('.//'+self.UP+'sequence')
+
+    def get_all_sequences(self):
+        return [e.text for e in self.get_all_sequence_elements()]
+
     # Returns information in an XML entry in fasta duplet: (header, sequence)
     def xml_to_fasta(self, entry):
         header = ">"
@@ -97,8 +103,7 @@ class ProteinXmlManager:
             addedInfo = entry.find(self.UP + 'protein').find(self.UP + 'recommendedName').find(self.UP + 'fullName').text
             score = entry.find(self.UP + 'proteinExistence').find(self.UP + 'depth')
             score = 'depth:' + score.get('reads') if score != None else ''
-            headerInfo = [x for x in [accession, name, chromosome, geneId, transcriptId, addedInfo, score] if
-                          x != None]  # remove None elements
+            headerInfo = [x for x in [accession, name, chromosome, geneId, transcriptId, addedInfo, score] if x != None]  # remove None elements
             header += ' '.join(headerInfo)
         else:
             if entry.get('dataset') == 'Swiss-Prot': database = 'sp'
@@ -160,6 +165,68 @@ class FastaManager:
                 sequence = ""
         fasta.close()
         return header_seq_pair
+
+
+#Takes in a GTF file and places it into the genemodel objects
+class GtfManager:
+    def __init__(self, gtf=None):
+        self.gtf = gtf
+
+
+#Takes in variant call information and places it into the genemodel objects
+class VcfManager:
+    def __init__(self, vcf=None):
+        self.vcf = vcf
+        self.header = []
+        self.missense_snvs = []
+        self.indels = []
+
+    def read_vcf(self):
+        for line in self.vcf:
+            if line.startswith('##'): self.header.append(line)  ##SnpEffVersion #May need to check SnpEff version in the header, the EFF info changed between versions 2 and 3
+            elif line.startswith('#CHROM'): continue
+            else: self.parse_vcf_line(line)
+
+    def parse_variant(self, line):
+        fields = line.split('\t')
+        (chrom, pos, id, ref, alts, qual, filter, info) = fields[0:8]
+        qual = float(qual)
+        depth = 0
+        for info_item in info.split(';'):
+            if info_item.find('=') < 0: return
+            (key, val) = info_item.split('=', 1)
+            if key == 'DP': depth = int(val)
+            if key == 'EFF':
+                for effect in val.split(','):
+                    (eff, effs) = effect.rstrip(')').split('(')
+                    if eff not in ['NON_SYNONYMOUS_CODING', 'MISSENSE', 'missense_variant']: continue  # updated for snpeff.4.0 with the inclusion of MISSENSE
+                    (impact, functional_class, codon_change, aa_change, aa_len, gene_name, biotype, coding,
+                     transcript, exon) = effs.split('|')[0:10]
+                    if transcript:
+                        aa_pos, ref_aa, alt_aa = self.parse_aa_change(aa_change)
+                        if not aa_pos: continue
+                        sav = "%s%d%s" % (ref_aa, aa_pos, alt_aa)
+                        transcript_based_entry(root, line, transcript, protein_fasta, chrom, pos, codon_change,
+                                               sav, alt_aa, aa_pos, minPepLength, leading_aas, trailing_aas)
+
+
+#Takes in a bed file, such as a Tophat splice junction bed file
+class BedManager:
+    def __init__(self, bed=None):
+        self.bed = bed
+
+
+#Takes in annotations from slncky, such as the filtered_info file
+class SlnckyManager:
+    def __init__(self):
+        pass
+
+
+#Takes in a STAR SJ.out.tab file specifying splice junctions
+class StarManager:
+    def __init__(self):
+        pass
+
 
 def add_unified(root, newId, rootIndex, acc, seqtype, chromosome, biotypes, geneId, transcriptId, seq):
     if newId:
