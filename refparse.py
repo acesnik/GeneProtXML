@@ -6,10 +6,16 @@ __date__ = "$Oct 27, 2015 2:54:44 PM$"
 
 import re
 import genemodel
+import numpy as np
 from lxml import etree as et
 
+
+class FileManager:
+    def __init__(self, file=None):
+        pass
+
 #Expect to make a new database if no path is given. Otherwise, manage the manimpulation of a current one.
-class ProteinXmlManager:
+class ProteinXmlManager(FileManager):
     def __init__(self, xml=None):
         HTML_NS = "http://uniprot.org/uniprot"
         XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
@@ -124,7 +130,8 @@ class ProteinXmlManager:
             
 
 #Currently have no need to create fasta objects. Only takes in a fasta and manages it.
-class FastaManager:
+#Make flexible, for both genome and protein at least
+class FastaManager(FileManager):
     def __init(self, fasta=None):
         self.fasta = fasta
 
@@ -168,62 +175,109 @@ class FastaManager:
 
 
 #Takes in a GTF file and places it into the genemodel objects
-class GtfManager:
+class GtfManager(FileManager):
     def __init__(self, gtf=None):
         self.gtf = gtf
 
 
 #Takes in variant call information and places it into the genemodel objects
-class VcfManager:
-    def __init__(self, vcf=None):
-        self.vcf = vcf
+class VcfManager(FileManager):
+    def __init__(self, vcf_path, chromosomes):
+        self.vcf_path = vcf_path
+        self.chromosomes = chromosomes
         self.header = []
-        self.missense_snvs = []
-        self.indels = []
+        self.field_header = []
+        self.individuals = []
+        self.haplotype_stack = [] #Used to handle haplotype grouping when parsing variant call lines
 
     def read_vcf(self):
-        for line in self.vcf:
-            if line.startswith('##'): self.header.append(line)  ##SnpEffVersion #May need to check SnpEff version in the header, the EFF info changed between versions 2 and 3
-            elif line.startswith('#CHROM'): continue
-            else: self.parse_vcf_line(line)
+        for line in open(self.vcf_path, 'r'):
+            if line.startswith('##'):
+                self.header.append(line)
+            elif line.startswith('#CHROM'):
+                self.field_header = line[1:].split('\t')
+                individual_names = self.field_header[10:] if len(self.field_header) >= 10 else ['individual1']
+                self.individuals = [genemodel.Individual(name, self.chromosomes) for name in individual_names]
+                self.haplotype_stack = [[] for name in individual_names]
+            else:
+                self.parse_vcf_line(line)
 
+    # This method considers the phasing information recorded in the GT field for each sample to initialize haplotypes
+    # with the start and stop loci indicated by the variant calls.
+    # Example: chromosome 1, position 1 through 8 have the genotypes [0/1, 1|1, 0|1, 0/1, 0|1, 0/1, 0|1, 0|1]
+    # Note: 0/1 or 1/0 are heterozygous alleles unphased with the previous variant call
+    # Note: 0|1 or 1|0 are heterozygous alleles phased with the previous variant call
+    # Note: 0|0 or 1|1 are homozygous alleles and are always phased with the above
+    # Note: Alternate alleles are indicated by a genotype > 0. If there is a list of alternate alleles,
+    # they are specified by 1, 2, and so on.
+    # Note: Haploid chromosomes (MT, Y, and X in males) should be declared unphased, and I plan to ignore "heterozygous"
+    # haploid variant calls.
     def parse_variant(self, line):
         fields = line.split('\t')
-        (chrom, pos, id, ref, alts, qual, filter, info) = fields[0:8]
+        (chrom, position, id, reference, alternates, qual, filter, info, format) = [fields[i] if i < len(fields) else None for i in range(9)]
+        individual_info_list = fields[10:] if len(fields) >= 10 else None
+        alternates = alternates.split(',') #There can be multiple alternates
         qual = float(qual)
-        depth = 0
-        for info_item in info.split(';'):
-            if info_item.find('=') < 0: return
-            (key, val) = info_item.split('=', 1)
-            if key == 'DP': depth = int(val)
-            if key == 'EFF':
-                for effect in val.split(','):
-                    (eff, effs) = effect.rstrip(')').split('(')
-                    if eff not in ['NON_SYNONYMOUS_CODING', 'MISSENSE', 'missense_variant']: continue  # updated for snpeff.4.0 with the inclusion of MISSENSE
-                    (impact, functional_class, codon_change, aa_change, aa_len, gene_name, biotype, coding,
-                     transcript, exon) = effs.split('|')[0:10]
-                    if transcript:
-                        aa_pos, ref_aa, alt_aa = self.parse_aa_change(aa_change)
-                        if not aa_pos: continue
-                        sav = "%s%d%s" % (ref_aa, aa_pos, alt_aa)
-                        transcript_based_entry(root, line, transcript, protein_fasta, chrom, pos, codon_change,
-                                               sav, alt_aa, aa_pos, minPepLength, leading_aas, trailing_aas)
+        depth = -1
+        allele_frequency = -1
+        genotype = None
+        if info:
+            for info_item in info.split(';'):
+                if info_item.find('=') < 0: return
+                (key, val) = info_item.split('=', 1)
+                if key.startswith('AF'): allele_frequency = float(val)
+                if key.startswith('DP'): depth = int(val)
+
+        seqvars = [genemodel.SequenceVariant(chrom, position, id, reference, alternate, qual, allele_frequency, depth) for alternate in alternates]
+
+        # No individual-specific information. Just append the seqvar(s) to a generic individual
+        if not format: self.individuals[0].sequence_variants += seqvars
+
+        # Individual-specific information available
+        if format:
+            for i, individual_info in enumerate(individual_info_list):
+                self.individuals[i].sequence_variants += seqvars
+                for indiv_info_item in individual_info.split(':'):
+                    for f, format_field in enumerate(format.split(':')):
+                        if format_field.startswith('DP'): depth = int(indiv_info_item[f]) #overwrite info standard field, since this one includes filtering criteria
+                        if format_field.startswith('GT'): genotype = indiv_info_item[f]
+                genotype = list(genotype)
+                ploid1_allele_ref, phase, ploid2_allele_ref = int(genotype[0]), genotype[1], int(genotype[2]) # 0 refers to reference. >0 refers to one of the alternates
+                ploid1_allele = seqvars[int(ploid1_allele) - 1] if ploid1_allele else None
+                ploid2_allele = seqvars[int(ploid2_allele) - 1] if ploid2_allele else None
+                is_phased = phase == '|'
+
+                current_haplotype = self.individuals[i].local_haplotypes[-1]
+                if not is_phased:
+                    self.close_haplotype(current_haplotype, i)
+                    self.individuals[i].local_haplotypes.append(genemodel.LocalHaplotype(chrom, position))
+                self.haplotype_stack[i].append(ploid1_allele, ploid2_allele)
+                current_haplotype.update_end(max(position, ploid1_allele.end if ploid1_allele else 0, ploid2_allele.end if ploid2_allele else 0))
+
+    def close_haplotype(self, haplotype, individual_index):
+        for ploid1_seqvar, ploid2_seqvar in self.haplotype_stack[individual_index]:
+            haplotype.add(ploid1_seqvar, ploid2_seqvar)
 
 
 #Takes in a bed file, such as a Tophat splice junction bed file
-class BedManager:
+class BedManager(FileManager):
     def __init__(self, bed=None):
         self.bed = bed
 
 
 #Takes in annotations from slncky, such as the filtered_info file
-class SlnckyManager:
+class SlnckyManager(FileManager):
     def __init__(self):
         pass
 
 
 #Takes in a STAR SJ.out.tab file specifying splice junctions
-class StarManager:
+class StarManager(FileManager):
+    def __init__(self):
+        pass
+
+
+class ProBamManager(FileManager):
     def __init__(self):
         pass
 

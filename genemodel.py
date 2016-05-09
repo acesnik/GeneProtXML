@@ -77,6 +77,13 @@ def reverse_complement(dna_seq):
     return rc
 
 
+class Individual:
+    def __init__(self, name, reference_chromosomes):
+        self.name = name
+        self.chroms = reference_chromosomes #A hash of chromosome names to Chromosome objects
+        self.sequence_variants = []
+        self.local_haplotypes = []
+
 #Gene Model structure
 class Chromosome:
     def __init__(self, name, sequence):
@@ -90,6 +97,13 @@ class Chromosome:
     def __str__(self): return self.sequence
 
     def __contains__(self, gene_name): return gene_name in [gene.name for gene in self.genes]
+
+    #TODO: implement efficient sorting of all the annotations under genes, amino_acid_sequences
+    def sort(self):
+        pass
+
+    def get_gene_by_position(self, position):
+        pass
 
 
 class ChromSegment:
@@ -106,13 +120,32 @@ class ChromSegment:
 
     def __str__(self): return self.chrom.sequence[self.start: self.end + 1]
 
-    def is_before(self, segment): return self.start < segment.start and self.end < segment.end and self.end < segment.start
+    def is_before(self, pos_or_segment):
+        if isinstance(pos_or_segment, SequenceVariant):
+            return self.start < pos_or_segment.start and self.end < pos_or_segment.end and self.end < pos_or_segment.start
+        else:
+            return self.end < pos_or_segment
 
-    def is_after(self, segment): return self.start > segment.start and self.end > segment.end and self.start > segment.end
+    def is_after(self, pos_or_segment):
+        if isinstance(pos_or_segment, SequenceVariant):
+            return self.start > pos_or_segment.start and self.end > pos_or_segment.end and self.start > pos_or_segment.end
+        else:
+            return self.start > pos_or_segment
 
-    def overlaps(self, segment): return not self.is_before(segment) and not self.is_after(segment)
+    def overlaps(self, pos_or_segment): return not self.is_before(pos_or_segment) and not self.is_after(pos_or_segment)
 
-    def equals(self, segment): return self.chrom == segment.chrom and self.start == segment.start and self.end == segment.end
+    #Equals counts as includes, as well
+    def includes(self, pos_or_segment):
+        if isinstance(pos_or_segment, SequenceVariant):
+            return self.start <= pos_or_segment.start and self.end >= pos_or_segment.end
+        else:
+            return pos_or_segment in range(self.start, self.end)
+
+    def equals(self, pos_or_segment):
+        if isinstance(pos_or_segment, SequenceVariant):
+            return self.chrom == pos_or_segment.chrom and self.start == pos_or_segment.start and self.end == pos_or_segment.end
+        else:
+            return self.start == self.end == pos_or_segment
 
     def bed_text(self, score, blockCount, blockSizes, blockStarts):
         return '\t'.join([str(self.chrom.name), str(self.start), str(self.end), self.id,
@@ -139,9 +172,15 @@ class SequenceVariant(ChromSegment):
 class SNV(SequenceVariant):
     def __init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth):
         SequenceVariant.__init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth)
+        #TODO: implement a check by position of the chromosome for missense/start_gain/stop_loss, i.e. type this variant and get any coding changes
 
-    
     def is_missense(self):
+        pass
+
+    def is_start_gain(self):
+        pass
+
+    def is_stop_loss(self):
         pass
 
     # TODO: replace this with a check against the gene model instead of taking it from the snpeff annotations
@@ -181,18 +220,29 @@ class Deletion(Indel):
         Indel.__init__(self, chrom, position, id, reference, alternate, qual, allele_frequency, depth)
 
 
+# A local haplotype is a set of alleles known or predicted to exist on the same chromosome. Since there are two of each
+# chromosome in a haploid genome, certain alleles exist 'adjacent' to one another in a genotype.
+# The term for assigning a local haplotype in variant calling workflows is 'phasing.' The result of phasing is a list
+# of alleles that are in phase or out of phase with one another. When in phase, alleles are expected to exist on the
+# same chromosome. When out of phase, there is no association between the alleles.
+#
+# Accordingly, each LocalHaplotype object contains two lists of SequenceVariants, corresponding to two of the same
+# chromosome in a diploid genome. Since homozygous alleles are always annotated as in phase with the previous
+# heterozygous allele in phasing tools, there should be no issue with redundnancy of haplotypes in a gene model.
+#
+# Multiple sequence variants can exist at a locus, i.e. specified in the same line of a variant call file,
+# so be sure to check for that later.
 class LocalHaplotype(ChromSegment):
-    def __init__(self, seqvar_list):
-        if not seqvar_list or False in [isinstance(seqvar, SequenceVariant) for seqvar in seqvar_list]: return None
-        self.seqvar_list = seqvar_list
-        start = sorted(self.seqvar_list, key=lambda x: x.start)[0].start
-        end = sorted(self.seqvar_list, key=lambda x: x.end)[0].end
-        chroms = [seqvar.chrom for seqvar in self.seqvar_list]
-        if len(chroms) > 1:
-            print "Error: Haplotypes across multiple chromosomes not expected in object LocalHaplotype."
-            exit(2)
-        ChromSegment.__init__(self, None, chroms[0], '+', start, end, None, None)
+    def __init__(self, chrom, start):
+        ChromSegment.__init__(self, None, chrom, '+', start, start, None, None)
+        self.ploid1 = []
+        self.ploid2 = []
 
+    def add(self, ploid1_seqvar, ploid2_seqvar):
+        if ploid1_seqvar: self.ploid1.append(ploid1_seqvar)
+        if ploid2_seqvar: self.ploid2.append(ploid2_seqvar)
+
+    def update_end(self, end): self.end = end
 
 #Amino acid sequences
 class Modification:
