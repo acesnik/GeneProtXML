@@ -22,16 +22,16 @@ class ProteinXmlManager(FileManager):
         NAMESPACE_MAP = {None: HTML_NS, "xsi": XSI_NS}
         self.UP = '{' + HTML_NS + '}'
 
-        self.db, self.root = None, None
-        if not xml:
-            self.root = et.Element(self.UP + 'uniprot', nsmap=NAMESPACE_MAP)
-            self.db = et.ElementTree(self.root)
-        elif isinstance(xml, et._ElementTree): self.db = xml
+        self.root = et.Element(self.UP + 'uniprot', nsmap=NAMESPACE_MAP)
+        self.db = et.ElementTree(self.root)
+        if isinstance(xml, et._ElementTree): self.db = xml
         elif isinstance(xml, et._Element): 
             print 'Error: use the ElementTree in ProteinXmlManager, not an Element'
             exit(2)
-        else: self.db = et.parse(xml)
-        self.root = self.db.getroot()
+        else:
+            for event, element in et.iterparse(xml):
+                if element.tag == "entry":
+                    self.root.append(self.condense_xml_entry(element))
 
     def lxml_entry(self, object):
         if isinstance(object, genemodel.SequenceVariant):

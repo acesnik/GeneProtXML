@@ -23,6 +23,8 @@ UP = '{'+HTML_NS+'}'
 def __main__():
     #Parse Command Line
     parser = optparse.OptionParser()
+    group = optparse.OptionGroup(parser, "Command", "Specify the type of file you would like to generate.")
+    parser.add_option_group(group)
     group = optparse.OptionGroup(parser, "Input/Output")
     group.add_option( '-x', '--reference_xml', dest='reference_xml', help='Reference protein UniProt-XML file. Sequence variant peptide entries are appended to this database to generate the ouptut UniProt-XML protein database.' )
     group.add_option( '-p', '--protein_fasta', dest='protein_fasta', help='Reference protein FASTA file. Used to generate SAV peptide entries. If no UniProt-XML is specified, SAV and NSJ entries will be appended to this database to generate an output database. By default, this output will be a UniProt-XML protein database without PTM annotations. If --output-fasta is selected, the output will be a protein FASTA.')

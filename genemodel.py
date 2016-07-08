@@ -315,9 +315,6 @@ class AminoAcidSequence:
         pass
 
 
-
-
-
 class Gene(ChromSegment):
     def __init__(self, id, chrom, strand, gene_start, gene_end, name='', biotype=''):
         ChromSegment.__init__(self, id, chrom, strand, gene_start, gene_end, name, biotype)
